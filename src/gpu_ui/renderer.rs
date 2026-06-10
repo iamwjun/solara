@@ -1,6 +1,9 @@
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use softbuffer::{Context, Surface};
+use winit::event_loop::OwnedDisplayHandle;
+use winit::window::Window;
 
 use crate::gpu_ui::draw::{clear, color_to_pixel, draw_triangle_demo, fill_circle};
 use crate::gpu_ui::layout::Button;
@@ -13,18 +16,14 @@ pub struct DemoCircle {
     pub color: [f32; 4],
 }
 
-pub struct Renderer<D, W> {
-    surface: Surface<D, W>,
+pub struct Renderer {
+    surface: Surface<OwnedDisplayHandle, Arc<Window>>,
     width: u32,
     height: u32,
 }
 
-impl<D, W> Renderer<D, W>
-where
-    D: softbuffer::HasDisplayHandle + Clone,
-    W: softbuffer::HasWindowHandle + Clone,
-{
-    pub fn new(context: &Context<D>, window: W, width: u32, height: u32) -> Self {
+impl Renderer {
+    pub fn new(context: &Context<OwnedDisplayHandle>, window: Arc<Window>, width: u32, height: u32) -> Self {
         let mut surface = Surface::new(context, window).expect("failed to create surface");
         if let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
             surface.resize(width, height).expect("failed to resize surface");

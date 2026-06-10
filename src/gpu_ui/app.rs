@@ -4,7 +4,7 @@ use softbuffer::Context;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, OwnedDisplayHandle};
 use winit::window::{Window, WindowId};
 
 use crate::gpu_ui::layout::{Button, FlexRow};
@@ -21,18 +21,18 @@ pub fn run() {
     event_loop.run_app(&mut app).expect("event loop failed");
 }
 
-struct GpuUiApp<D> {
-    context: Context<D>,
+struct GpuUiApp {
+    context: Context<OwnedDisplayHandle>,
     window: Option<Arc<Window>>,
-    renderer: Option<Renderer<D, Arc<Window>>>,
+    renderer: Option<Renderer>,
     buttons: Vec<Button>,
     demo_circle: DemoCircle,
     layout_dirty: bool,
     cursor: (f32, f32),
 }
 
-impl<D> GpuUiApp<D> {
-    fn new(context: Context<D>) -> Self {
+impl GpuUiApp {
+    fn new(context: Context<OwnedDisplayHandle>) -> Self {
         Self {
             context,
             window: None,
@@ -112,10 +112,7 @@ fn rand_channel(value: f32) -> f32 {
     if next > 1.0 { next - 0.82 } else { next }
 }
 
-impl<D> ApplicationHandler for GpuUiApp<D>
-where
-    D: softbuffer::HasDisplayHandle + Clone + 'static,
-{
+impl ApplicationHandler for GpuUiApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;

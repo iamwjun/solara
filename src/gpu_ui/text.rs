@@ -1,9 +1,7 @@
-use font8x8::UnicodeBasicFonts;
+use font8x8::{BASIC_FONTS, UnicodeFonts};
 
 use crate::gpu_ui::draw::put_pixel;
 use crate::gpu_ui::layout::Rect;
-
-const FONT: UnicodeBasicFonts = UnicodeBasicFonts::BasicFont;
 
 pub fn draw_text(
     buffer: &mut [u32],
@@ -20,7 +18,7 @@ pub fn draw_text(
     let y = rect.y + ((rect.height - char_height) * 0.5).max(0.0);
 
     for ch in text.chars() {
-        if let Some(glyph) = FONT.get(ch) {
+        if let Some(glyph) = BASIC_FONTS.get(ch) {
             for (row, bits) in glyph.iter().enumerate() {
                 for col in 0..8 {
                     if bits & (1 << col) != 0 {
