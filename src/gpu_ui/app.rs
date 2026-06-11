@@ -7,9 +7,8 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 use crate::gpu_ui::async_utils::block_on;
-use crate::gpu_ui::html::Document;
+use crate::gpu_ui::html::{Document, RenderBatch};
 use crate::gpu_ui::renderer::Renderer;
-use crate::gpu_ui::shapes::ShapeInstance;
 
 const WINDOW_WIDTH: u32 = 960;
 const WINDOW_HEIGHT: u32 = 720;
@@ -25,7 +24,7 @@ struct GpuUiApp {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     document: Option<Document>,
-    instances: Vec<ShapeInstance>,
+    batch: RenderBatch,
     viewport_height: f32,
     scale_factor: f32,
     cursor: (f32, f32),
@@ -56,7 +55,7 @@ impl GpuUiApp {
             return;
         };
         document.clamp_scroll_to(self.viewport_height);
-        crate::gpu_ui::html::collect_instances(document, self.scale_factor, &mut self.instances);
+        crate::gpu_ui::html::collect_batch(document, self.scale_factor, &mut self.batch);
     }
 
     fn render(&mut self) {
@@ -65,7 +64,7 @@ impl GpuUiApp {
             return;
         };
 
-        match renderer.render(&self.instances) {
+        match renderer.render(&self.batch.shapes, &self.batch.text) {
             Ok(()) => {}
             Err(wgpu::SurfaceError::Lost) => {
                 if let Some(window) = &self.window {

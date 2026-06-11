@@ -38,15 +38,22 @@ impl Default for Theme {
 pub fn paint_document(
     nodes: &[HtmlNode],
     scroll_y: f32,
-    out: &mut Vec<ShapeInstance>,
+    shapes: &mut Vec<ShapeInstance>,
+    text_out: &mut text::TextBatch,
 ) {
     let theme = Theme::default();
     for node in nodes {
-        paint_node(node, scroll_y, &theme, out);
+        paint_node(node, scroll_y, &theme, shapes, text_out);
     }
 }
 
-fn paint_node(node: &HtmlNode, scroll_y: f32, theme: &Theme, out: &mut Vec<ShapeInstance>) {
+fn paint_node(
+    node: &HtmlNode,
+    scroll_y: f32,
+    theme: &Theme,
+    shapes: &mut Vec<ShapeInstance>,
+    text_out: &mut text::TextBatch,
+) {
     let bounds = offset_rect(node.bounds, 0.0, -scroll_y);
     if bounds.bottom() < 0.0 || bounds.y > 2000.0 {
         // coarse cull for off-screen blocks
@@ -55,29 +62,29 @@ fn paint_node(node: &HtmlNode, scroll_y: f32, theme: &Theme, out: &mut Vec<Shape
     match &node.kind {
         ElementKind::Heading { level, text } => {
             let color = theme.text;
-            text::draw_text_left(out, bounds.x, bounds.y + 4.0, text, color);
+            text::queue_left(text_out, bounds.x, bounds.y + 4.0, text, color);
             let _ = level;
         }
-        ElementKind::Paragraph { inlines } => paint_inlines(out, bounds, inlines, theme.text),
+        ElementKind::Paragraph { inlines } => paint_inlines(text_out, bounds, inlines, theme.text),
         ElementKind::HorizontalRule => {
-            stroke_rect(out, bounds, theme.border, 1.0);
+            stroke_rect(shapes, bounds, theme.border, 1.0);
         }
         ElementKind::Link { text, .. } => {
-            text::draw_text_left(out, bounds.x, bounds.y + 2.0, text, theme.link);
-            fill_rect(out, Rect::new(bounds.x, bounds.bottom() - 2.0, text.chars().count() as f32 * 8.0, 1.0), theme.link);
+            text::queue_left(text_out, bounds.x, bounds.y + 2.0, text, theme.link);
+            fill_rect(shapes, Rect::new(bounds.x, bounds.bottom() - 2.0, text.chars().count() as f32 * text::char_width_default(), 1.0), theme.link);
         }
         ElementKind::OrderedList { items } => {
             for (i, item) in items.iter().enumerate() {
                 let y = bounds.y + i as f32 * TEXT_LINE;
-                text::draw_text_left(out, bounds.x, y, &format!("{}.", i + 1), theme.text);
-                text::draw_text_left(out, bounds.x + 24.0, y, item, theme.text);
+                text::queue_left(text_out, bounds.x, y, &format!("{}.", i + 1), theme.text);
+                text::queue_left(text_out, bounds.x + 24.0, y, item, theme.text);
             }
         }
         ElementKind::UnorderedList { items } => {
             for (i, item) in items.iter().enumerate() {
                 let y = bounds.y + i as f32 * TEXT_LINE;
-                fill_rect(out, Rect::new(bounds.x + 4.0, y + 6.0, 4.0, 4.0), theme.text);
-                text::draw_text_left(out, bounds.x + 16.0, y, item, theme.text);
+                fill_rect(shapes, Rect::new(bounds.x + 4.0, y + 6.0, 4.0, 4.0), theme.text);
+                text::queue_left(text_out, bounds.x + 16.0, y, item, theme.text);
             }
         }
         ElementKind::Details {
@@ -85,23 +92,23 @@ fn paint_node(node: &HtmlNode, scroll_y: f32, theme: &Theme, out: &mut Vec<Shape
             summary_checkbox,
             children,
         } => {
-            paint_details_summary(out, bounds, summary, *summary_checkbox, node.open, theme);
+            paint_details_summary(shapes, text_out, bounds, summary, *summary_checkbox, node.open, theme);
             if node.open {
                 let inner = Rect::new(bounds.x + 12.0, bounds.y + CONTROL_H, bounds.width - 12.0, bounds.height - CONTROL_H);
-                stroke_rect(out, inner, theme.border, 1.0);
+                stroke_rect(shapes, inner, theme.border, 1.0);
                 for child in children {
-                    paint_node(child, scroll_y, theme, out);
+                    paint_node(child, scroll_y, theme, shapes, text_out);
                 }
             }
         }
         ElementKind::Div { children } | ElementKind::Form { children } => {
             for child in children {
-                paint_node(child, scroll_y, theme, out);
+                paint_node(child, scroll_y, theme, shapes, text_out);
             }
         }
         ElementKind::Label { text, control } => {
-            text::draw_text_left(out, bounds.x, bounds.y + 4.0, text, theme.text);
-            paint_node(control, scroll_y, theme, out);
+            text::queue_left(text_out, bounds.x, bounds.y + 4.0, text, theme.text);
+            paint_node(control, scroll_y, theme, shapes, text_out);
         }
         ElementKind::Input {
             input_type,
@@ -109,91 +116,91 @@ fn paint_node(node: &HtmlNode, scroll_y: f32, theme: &Theme, out: &mut Vec<Shape
             checked,
             label,
             ..
-        } => paint_input(out, bounds, input_type, value, *checked, label.as_deref(), theme),
+        } => paint_input(shapes, text_out, bounds, input_type, value, *checked, label.as_deref(), theme),
         ElementKind::Select { options, selected } => {
-            paint_select(out, bounds, options, *selected, theme);
+            paint_select(shapes, text_out, bounds, options, *selected, theme);
         }
         ElementKind::Textarea { value, rows, .. } => {
-            paint_textarea(out, bounds, value, *rows, theme);
+            paint_textarea(shapes, text_out, bounds, value, *rows, theme);
         }
         ElementKind::Button { label, button_type } => {
-            paint_button(out, bounds, label, button_type, theme);
+            paint_button(shapes, text_out, bounds, label, button_type, theme);
         }
         ElementKind::Table { headers, rows } => {
-            paint_table(out, bounds, headers, rows, theme);
+            paint_table(shapes, text_out, bounds, headers, rows, theme);
         }
         ElementKind::Svg { width, height, children } => {
-            paint_svg(out, bounds, *width, *height, children, theme);
+            paint_svg(shapes, bounds, *width, *height, children, theme);
         }
         ElementKind::Canvas { width, height } => {
-            stroke_rect(out, bounds, theme.border, 1.0);
-            fill_rect(out, bounds.inset(1.0), [0.92, 0.92, 0.92, 1.0]);
-            text::draw_text_left(out, bounds.x + 8.0, bounds.y + 8.0, &format!("canvas {}x{}", *width as u32, *height as u32), theme.text);
+            stroke_rect(shapes, bounds, theme.border, 1.0);
+            fill_rect(shapes, bounds.inset(1.0), [0.92, 0.92, 0.92, 1.0]);
+            text::queue_left(text_out, bounds.x + 8.0, bounds.y + 8.0, &format!("canvas {}x{}", *width as u32, *height as u32), theme.text);
         }
         ElementKind::Iframe { children } => {
-            fill_rect(out, bounds, theme.iframe_bg);
-            stroke_rect(out, bounds, theme.border, 2.0);
-            text::draw_text_left(out, bounds.x + 8.0, bounds.y + 4.0, "iframe", theme.text);
+            fill_rect(shapes, bounds, theme.iframe_bg);
+            stroke_rect(shapes, bounds, theme.border, 2.0);
+            text::queue_left(text_out, bounds.x + 8.0, bounds.y + 4.0, "iframe", theme.text);
             let inner = bounds.inset(8.0);
             for child in children {
                 let mut cloned = child.clone();
                 let dy = inner.y - cloned.bounds.y;
                 shift_bounds(&mut cloned, 0.0, dy);
-                paint_node(&cloned, scroll_y, theme, out);
+                paint_node(&cloned, scroll_y, theme, shapes, text_out);
             }
         }
         ElementKind::Image { alt, .. } => {
-            fill_rect(out, bounds, theme.img_fill);
-            stroke_rect(out, bounds, theme.border, 1.0);
-            text::draw_text_left(out, bounds.x + 8.0, bounds.y + bounds.height * 0.5 - 4.0, alt, [1.0, 1.0, 1.0, 1.0]);
+            fill_rect(shapes, bounds, theme.img_fill);
+            stroke_rect(shapes, bounds, theme.border, 1.0);
+            text::queue_left(text_out, bounds.x + 8.0, bounds.y + bounds.height * 0.5 - 4.0, alt, [1.0, 1.0, 1.0, 1.0]);
         }
         ElementKind::Dialog { children, floating } => {
-            fill_rect(out, bounds, theme.dialog_bg);
-            stroke_rect(out, bounds, theme.border, if *floating { 2.0 } else { 1.0 });
+            fill_rect(shapes, bounds, theme.dialog_bg);
+            stroke_rect(shapes, bounds, theme.border, if *floating { 2.0 } else { 1.0 });
             if *floating {
-                text::draw_text_left(out, bounds.x + 8.0, bounds.y + 4.0, "dialog", theme.text);
+                text::queue_left(text_out, bounds.x + 8.0, bounds.y + 4.0, "dialog", theme.text);
             }
             for child in children {
-                paint_node(child, scroll_y, theme, out);
+                paint_node(child, scroll_y, theme, shapes, text_out);
             }
         }
         ElementKind::Progress { value, max } => {
-            text::draw_text_left(out, bounds.x, bounds.y, "progress", theme.text);
+            text::queue_left(text_out, bounds.x, bounds.y, "progress", theme.text);
             let bar = Rect::new(bounds.x, bounds.y + 14.0, bounds.width, 10.0);
-            fill_rect(out, bar, [0.85, 0.85, 0.85, 1.0]);
+            fill_rect(shapes, bar, [0.85, 0.85, 0.85, 1.0]);
             let fill_w = bar.width * (value / max).clamp(0.0, 1.0);
-            fill_rect(out, Rect::new(bar.x, bar.y, fill_w, bar.height), theme.accent);
+            fill_rect(shapes, Rect::new(bar.x, bar.y, fill_w, bar.height), theme.accent);
         }
         ElementKind::Meter { value, label } => {
-            text::draw_text_left(out, bounds.x, bounds.y, "meter", theme.text);
+            text::queue_left(text_out, bounds.x, bounds.y, "meter", theme.text);
             let bar = Rect::new(bounds.x, bounds.y + 14.0, bounds.width * 0.6, 10.0);
-            fill_rect(out, bar, [0.85, 0.85, 0.85, 1.0]);
-            fill_rect(out, Rect::new(bar.x, bar.y, bar.width * value.clamp(0.0, 1.0), bar.height), [0.2, 0.7, 0.3, 1.0]);
-            text::draw_text_left(out, bar.x + bar.width + 8.0, bar.y - 2.0, label, theme.text);
+            fill_rect(shapes, bar, [0.85, 0.85, 0.85, 1.0]);
+            fill_rect(shapes, Rect::new(bar.x, bar.y, bar.width * value.clamp(0.0, 1.0), bar.height), [0.2, 0.7, 0.3, 1.0]);
+            text::queue_left(text_out, bar.x + bar.width + 8.0, bar.y - 2.0, label, theme.text);
         }
         ElementKind::Slider { value, label } => {
-            text::draw_text_left(out, bounds.x, bounds.y, "slider", theme.text);
+            text::queue_left(text_out, bounds.x, bounds.y, "slider", theme.text);
             let track = Rect::new(bounds.x, bounds.y + 16.0, bounds.width * 0.6, 4.0);
-            fill_rect(out, track, [0.75, 0.75, 0.75, 1.0]);
+            fill_rect(shapes, track, [0.75, 0.75, 0.75, 1.0]);
             let knob_x = track.x + track.width * value.clamp(0.0, 1.0) - 6.0;
-            fill_rect(out, Rect::new(knob_x, track.y - 4.0, 12.0, 12.0), theme.accent);
-            text::draw_text_left(out, track.x + track.width + 8.0, track.y - 4.0, label, theme.text);
+            fill_rect(shapes, Rect::new(knob_x, track.y - 4.0, 12.0, 12.0), theme.accent);
+            text::queue_left(text_out, track.x + track.width + 8.0, track.y - 4.0, label, theme.text);
         }
         ElementKind::Search { value, width } => {
-            text::draw_text_left(out, bounds.x, bounds.y, "search", theme.text);
+            text::queue_left(text_out, bounds.x, bounds.y, "search", theme.text);
             let w = width.min(bounds.width);
             let rect = Rect::new(bounds.x, bounds.y + 14.0, w, CONTROL_H);
-            paint_text_field(out, rect, value, theme);
+            paint_text_field(shapes, text_out, rect, value, theme);
         }
         ElementKind::Color => {
-            stroke_rect(out, bounds, theme.border, 1.0);
+            stroke_rect(shapes, bounds, theme.border, 1.0);
             fill_rect(
-                out,
+                shapes,
                 Rect::new(bounds.x, bounds.y, bounds.width, bounds.height - 14.0).inset(1.0),
                 [0.8, 0.2, 0.2, 1.0],
             );
-            text::draw_text_left(
-                out,
+            text::queue_left(
+                text_out,
                 bounds.x,
                 bounds.y + bounds.height - 12.0,
                 "color",
@@ -201,12 +208,12 @@ fn paint_node(node: &HtmlNode, scroll_y: f32, theme: &Theme, out: &mut Vec<Shape
             );
         }
         ElementKind::Footer { text } => {
-            fill_rect(out, bounds, [0.92, 0.92, 0.92, 1.0]);
-            text::draw_text_left(out, bounds.x + 8.0, bounds.y + 8.0, text, theme.text);
+            fill_rect(shapes, bounds, [0.92, 0.92, 0.92, 1.0]);
+            text::queue_left(text_out, bounds.x + 8.0, bounds.y + 8.0, text, theme.text);
         }
         ElementKind::PlainText { text } => {
-            text::draw_text_wrapped(
-                out,
+            text::queue_wrapped(
+                text_out,
                 bounds.x,
                 bounds.y + 2.0,
                 text,
@@ -218,7 +225,7 @@ fn paint_node(node: &HtmlNode, scroll_y: f32, theme: &Theme, out: &mut Vec<Shape
     }
 }
 
-fn paint_inlines(out: &mut Vec<ShapeInstance>, bounds: Rect, inlines: &[Inline], default: [f32; 4]) {
+fn paint_inlines(text_out: &mut text::TextBatch, bounds: Rect, inlines: &[Inline], default: [f32; 4]) {
     let mut x = bounds.x;
     let mut y = bounds.y + 2.0;
     let right = bounds.x + bounds.width;
@@ -228,12 +235,12 @@ fn paint_inlines(out: &mut Vec<ShapeInstance>, bounds: Rect, inlines: &[Inline],
             Inline::Bold(t) => (t.as_str(), default),
             Inline::Italic(t) => (t.as_str(), [0.35, 0.35, 0.35, 1.0]),
         };
-        (x, y) = paint_inline_run(out, x, y, bounds.x, right, text, color);
+        (x, y) = paint_inline_run(text_out, x, y, bounds.x, right, text, color);
     }
 }
 
 fn paint_inline_run(
-    out: &mut Vec<ShapeInstance>,
+    text_out: &mut text::TextBatch,
     mut x: f32,
     mut y: f32,
     left: f32,
@@ -244,9 +251,9 @@ fn paint_inline_run(
     let mut line_start = x;
     let mut line = String::new();
     for ch in text.chars() {
-        if x + text::CHAR_W > right && x > left {
+        if x + text::char_width_default() > right && x > left {
             if !line.is_empty() {
-                text::draw_text_left(out, line_start, y, &line, color);
+                text::queue_left(text_out, line_start, y, &line, color);
                 line.clear();
             }
             x = left;
@@ -254,16 +261,17 @@ fn paint_inline_run(
             y += TEXT_LINE;
         }
         line.push(ch);
-        x += text::CHAR_W;
+        x += text::char_width_default();
     }
     if !line.is_empty() {
-        text::draw_text_left(out, line_start, y, &line, color);
+        text::queue_left(text_out, line_start, y, &line, color);
     }
     (x, y)
 }
 
 fn paint_details_summary(
-    out: &mut Vec<ShapeInstance>,
+    shapes: &mut Vec<ShapeInstance>,
+    text_out: &mut text::TextBatch,
     bounds: Rect,
     summary: &str,
     checkbox: bool,
@@ -271,19 +279,20 @@ fn paint_details_summary(
     theme: &Theme,
 ) {
     let row = Rect::new(bounds.x, bounds.y, bounds.width, CONTROL_H);
-    fill_rect(out, row, [0.93, 0.93, 0.93, 1.0]);
-    stroke_rect(out, row, theme.border, 1.0);
-    text::draw_text_left(out, bounds.x + 8.0, bounds.y + 6.0, if open { "v" } else { ">" }, theme.text);
+    fill_rect(shapes, row, [0.93, 0.93, 0.93, 1.0]);
+    stroke_rect(shapes, row, theme.border, 1.0);
+    text::queue_left(text_out, bounds.x + 8.0, bounds.y + 6.0, if open { "v" } else { ">" }, theme.text);
     let mut tx = bounds.x + 24.0;
     if checkbox {
-        paint_checkbox(out, Rect::new(tx, bounds.y + 6.0, 16.0, 16.0), open, theme);
+        paint_checkbox(shapes, Rect::new(tx, bounds.y + 6.0, 16.0, 16.0), open, theme);
         tx += 24.0;
     }
-    text::draw_text_left(out, tx, bounds.y + 6.0, summary, theme.text);
+    text::queue_left(text_out, tx, bounds.y + 6.0, summary, theme.text);
 }
 
 fn paint_input(
-    out: &mut Vec<ShapeInstance>,
+    shapes: &mut Vec<ShapeInstance>,
+    text_out: &mut text::TextBatch,
     bounds: Rect,
     input_type: &InputType,
     value: &str,
@@ -294,24 +303,24 @@ fn paint_input(
     match input_type {
         InputType::Checkbox => {
             if let Some(label) = label {
-                paint_checkbox(out, Rect::new(bounds.x, bounds.y + 2.0, 16.0, 16.0), checked, theme);
-                text::draw_text_left(out, bounds.x + 24.0, bounds.y + 2.0, label, theme.text);
+                paint_checkbox(shapes, Rect::new(bounds.x, bounds.y + 2.0, 16.0, 16.0), checked, theme);
+                text::queue_left(text_out, bounds.x + 24.0, bounds.y + 2.0, label, theme.text);
             }
         }
         InputType::Radio => {
             if let Some(label) = label {
                 let c = Rect::new(bounds.x, bounds.y + 2.0, 16.0, 16.0);
-                out.push(ShapeInstance::circle(c.x + 8.0, c.y + 8.0, 16.0, theme.control_bg));
-                stroke_rect(out, c, theme.border, 1.0);
+                shapes.push(ShapeInstance::circle(c.x + 8.0, c.y + 8.0, 16.0, theme.control_bg));
+                stroke_rect(shapes, c, theme.border, 1.0);
                 if checked {
-                    fill_rect(out, Rect::new(c.x + 4.0, c.y + 4.0, 8.0, 8.0), theme.accent);
+                    fill_rect(shapes, Rect::new(c.x + 4.0, c.y + 4.0, 8.0, 8.0), theme.accent);
                 }
-                text::draw_text_left(out, bounds.x + 24.0, bounds.y + 2.0, label, theme.text);
+                text::queue_left(text_out, bounds.x + 24.0, bounds.y + 2.0, label, theme.text);
             }
         }
         _ => {
             if let Some(label) = label {
-                text::draw_text_left(out, bounds.x, bounds.y, label, theme.text);
+                text::queue_left(text_out, bounds.x, bounds.y, label, theme.text);
             }
             let field = if label.is_some() {
                 Rect::new(bounds.x, bounds.y + 18.0, bounds.width.min(280.0), CONTROL_H)
@@ -323,95 +332,95 @@ fn paint_input(
             } else {
                 value.to_string()
             };
-            paint_text_field(out, field, &display, theme);
+            paint_text_field(shapes, text_out, field, &display, theme);
         }
     }
 }
 
-fn paint_checkbox(out: &mut Vec<ShapeInstance>, rect: Rect, checked: bool, theme: &Theme) {
-    fill_rect(out, rect, theme.control_bg);
-    stroke_rect(out, rect, theme.border, 1.0);
+fn paint_checkbox(shapes: &mut Vec<ShapeInstance>, rect: Rect, checked: bool, theme: &Theme) {
+    fill_rect(shapes, rect, theme.control_bg);
+    stroke_rect(shapes, rect, theme.border, 1.0);
     if checked {
-        fill_rect(out, Rect::new(rect.x + 3.0, rect.y + 3.0, 10.0, 10.0), theme.accent);
+        fill_rect(shapes, Rect::new(rect.x + 3.0, rect.y + 3.0, 10.0, 10.0), theme.accent);
     }
 }
 
-fn paint_text_field(out: &mut Vec<ShapeInstance>, rect: Rect, value: &str, theme: &Theme) {
-    fill_rect(out, rect, theme.control_bg);
-    stroke_rect(out, rect, theme.border, 1.0);
-    text::draw_text_left(out, rect.x + 6.0, rect.y + 6.0, value, theme.text);
+fn paint_text_field(shapes: &mut Vec<ShapeInstance>, text_out: &mut text::TextBatch, rect: Rect, value: &str, theme: &Theme) {
+    fill_rect(shapes, rect, theme.control_bg);
+    stroke_rect(shapes, rect, theme.border, 1.0);
+    text::queue_left(text_out, rect.x + 6.0, rect.y + 6.0, value, theme.text);
 }
 
-fn paint_select(out: &mut Vec<ShapeInstance>, bounds: Rect, options: &[String], selected: usize, theme: &Theme) {
+fn paint_select(shapes: &mut Vec<ShapeInstance>, text_out: &mut text::TextBatch, bounds: Rect, options: &[String], selected: usize, theme: &Theme) {
     let rect = Rect::new(bounds.x, bounds.y, bounds.width.min(200.0), CONTROL_H);
-    fill_rect(out, rect, theme.control_bg);
-    stroke_rect(out, rect, theme.border, 1.0);
+    fill_rect(shapes, rect, theme.control_bg);
+    stroke_rect(shapes, rect, theme.border, 1.0);
     let label = options.get(selected).map(String::as_str).unwrap_or("");
-    text::draw_text_left(out, rect.x + 6.0, rect.y + 6.0, label, theme.text);
-    fill_rect(out, Rect::new(rect.x + rect.width - 18.0, rect.y + 6.0, 12.0, 12.0), theme.button_bg);
+    text::queue_left(text_out, rect.x + 6.0, rect.y + 6.0, label, theme.text);
+    fill_rect(shapes, Rect::new(rect.x + rect.width - 18.0, rect.y + 6.0, 12.0, 12.0), theme.button_bg);
 }
 
-fn paint_textarea(out: &mut Vec<ShapeInstance>, bounds: Rect, value: &str, rows: u32, theme: &Theme) {
+fn paint_textarea(shapes: &mut Vec<ShapeInstance>, text_out: &mut text::TextBatch, bounds: Rect, value: &str, rows: u32, theme: &Theme) {
     let rect = Rect::new(bounds.x, bounds.y, bounds.width.min(320.0), rows as f32 * TEXT_LINE + 8.0);
-    fill_rect(out, rect, theme.control_bg);
-    stroke_rect(out, rect, theme.border, 1.0);
-    text::draw_text_left(out, rect.x + 6.0, rect.y + 6.0, value, theme.text);
+    fill_rect(shapes, rect, theme.control_bg);
+    stroke_rect(shapes, rect, theme.border, 1.0);
+    text::queue_left(text_out, rect.x + 6.0, rect.y + 6.0, value, theme.text);
 }
 
-fn paint_button(out: &mut Vec<ShapeInstance>, bounds: Rect, label: &str, button_type: &ButtonType, theme: &Theme) {
-    fill_rect(out, bounds, theme.button_bg);
-    stroke_rect(out, bounds, theme.border, 1.0);
+fn paint_button(shapes: &mut Vec<ShapeInstance>, text_out: &mut text::TextBatch, bounds: Rect, label: &str, button_type: &ButtonType, theme: &Theme) {
+    fill_rect(shapes, bounds, theme.button_bg);
+    stroke_rect(shapes, bounds, theme.border, 1.0);
     let prefix = match button_type {
         ButtonType::Submit => "[submit] ",
         ButtonType::Reset => "[reset] ",
         ButtonType::Button => "",
     };
     let text = format!("{prefix}{label}");
-    text::draw_text_wrapped(
-        out,
+    text::queue_wrapped(
+        text_out,
         bounds.x + 8.0,
         bounds.y + 6.0,
         &text,
         bounds.width - 16.0,
-        TEXT_LINE,
+        bounds.height - 12.0,
         theme.text,
     );
 }
 
-fn paint_table(out: &mut Vec<ShapeInstance>, bounds: Rect, headers: &[String], rows: &[Vec<String>], theme: &Theme) {
+fn paint_table(shapes: &mut Vec<ShapeInstance>, text_out: &mut text::TextBatch, bounds: Rect, headers: &[String], rows: &[Vec<String>], theme: &Theme) {
     let cols = headers.len().max(1);
     let col_w = bounds.width / cols as f32;
     let row_h = 24.0;
-    stroke_rect(out, bounds, theme.border, 1.0);
+    stroke_rect(shapes, bounds, theme.border, 1.0);
     for (c, header) in headers.iter().enumerate() {
         let cell = Rect::new(bounds.x + c as f32 * col_w, bounds.y, col_w, row_h);
-        fill_rect(out, cell, theme.table_header);
-        stroke_rect(out, cell, theme.border, 1.0);
-        text::draw_text_left(out, cell.x + 4.0, cell.y + 4.0, header, theme.text);
+        fill_rect(shapes, cell, theme.table_header);
+        stroke_rect(shapes, cell, theme.border, 1.0);
+        text::queue_left(text_out, cell.x + 4.0, cell.y + 4.0, header, theme.text);
     }
     for (r, row) in rows.iter().enumerate() {
         for (c, value) in row.iter().enumerate() {
             let cell = Rect::new(bounds.x + c as f32 * col_w, bounds.y + (r + 1) as f32 * row_h, col_w, row_h);
-            fill_rect(out, cell, theme.control_bg);
-            stroke_rect(out, cell, theme.border, 1.0);
-            text::draw_text_left(out, cell.x + 4.0, cell.y + 4.0, value, theme.text);
+            fill_rect(shapes, cell, theme.control_bg);
+            stroke_rect(shapes, cell, theme.border, 1.0);
+            text::queue_left(text_out, cell.x + 4.0, cell.y + 4.0, value, theme.text);
         }
     }
 }
 
-fn paint_svg(out: &mut Vec<ShapeInstance>, bounds: Rect, width: f32, height: f32, children: &[SvgChild], theme: &Theme) {
-    stroke_rect(out, bounds, theme.border, 1.0);
+fn paint_svg(shapes: &mut Vec<ShapeInstance>, bounds: Rect, width: f32, height: f32, children: &[SvgChild], theme: &Theme) {
+    stroke_rect(shapes, bounds, theme.border, 1.0);
     let sx = bounds.width / width;
     let sy = bounds.height / height;
     for child in children {
         match child {
             SvgChild::Rect { x, y, width, height, fill, stroke } => {
                 let r = Rect::new(bounds.x + x * sx, bounds.y + y * sy, width * sx, height * sy);
-                fill_rect(out, r, *fill);
-                stroke_rect(out, r, *stroke, 2.0);
+                fill_rect(shapes, r, *fill);
+                stroke_rect(shapes, r, *stroke, 2.0);
             }
             SvgChild::Circle { cx, cy, r, fill } => {
-                out.push(ShapeInstance::circle(
+                shapes.push(ShapeInstance::circle(
                     bounds.x + cx * sx,
                     bounds.y + cy * sy,
                     r * 2.0 * sx,
@@ -426,7 +435,7 @@ fn paint_svg(out: &mut Vec<ShapeInstance>, bounds: Rect, width: f32, height: f32
                     let dy = y1 - y0;
                     let len = (dx * dx + dy * dy).sqrt().max(2.0);
                     fill_rect(
-                        out,
+                        shapes,
                         Rect::new(bounds.x + x0 * sx, bounds.y + y0 * sy, len * sx, 3.0),
                         *stroke,
                     );
@@ -436,17 +445,17 @@ fn paint_svg(out: &mut Vec<ShapeInstance>, bounds: Rect, width: f32, height: f32
     }
 }
 
-fn fill_rect(out: &mut Vec<ShapeInstance>, rect: Rect, color: [f32; 4]) {
+fn fill_rect(shapes: &mut Vec<ShapeInstance>, rect: Rect, color: [f32; 4]) {
     if rect.width > 0.0 && rect.height > 0.0 {
-        out.push(ShapeInstance::rect(rect, color));
+        shapes.push(ShapeInstance::rect(rect, color));
     }
 }
 
-fn stroke_rect(out: &mut Vec<ShapeInstance>, rect: Rect, color: [f32; 4], thickness: f32) {
-    fill_rect(out, Rect::new(rect.x, rect.y, rect.width, thickness), color);
-    fill_rect(out, Rect::new(rect.x, rect.bottom() - thickness, rect.width, thickness), color);
-    fill_rect(out, Rect::new(rect.x, rect.y, thickness, rect.height), color);
-    fill_rect(out, Rect::new(rect.x + rect.width - thickness, rect.y, thickness, rect.height), color);
+fn stroke_rect(shapes: &mut Vec<ShapeInstance>, rect: Rect, color: [f32; 4], thickness: f32) {
+    fill_rect(shapes, Rect::new(rect.x, rect.y, rect.width, thickness), color);
+    fill_rect(shapes, Rect::new(rect.x, rect.bottom() - thickness, rect.width, thickness), color);
+    fill_rect(shapes, Rect::new(rect.x, rect.y, thickness, rect.height), color);
+    fill_rect(shapes, Rect::new(rect.x + rect.width - thickness, rect.y, thickness, rect.height), color);
 }
 
 fn offset_rect(rect: Rect, dx: f32, dy: f32) -> Rect {

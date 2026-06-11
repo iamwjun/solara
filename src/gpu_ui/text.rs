@@ -1,72 +1,121 @@
-use font8x8::{BASIC_FONTS, UnicodeFonts};
+use std::sync::OnceLock;
 
-use crate::gpu_ui::geometry::Rect;
-use crate::gpu_ui::shapes::{ShapeInstance, SHAPE_RECT};
+use wgpu_glyph::ab_glyph::{Font, FontArc};
 
-pub const CHAR_W: f32 = 8.0;
-pub const CHAR_H: f32 = 8.0;
+pub const FONT_SCALE: f32 = 14.0;
+
+#[derive(Clone, Debug, Default)]
+pub struct TextSection {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub text: String,
+    pub color: [f32; 4],
+    pub scale: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TextBatch {
+    pub sections: Vec<TextSection>,
+}
+
+impl TextBatch {
+    pub fn clear(&mut self) {
+        self.sections.clear();
+    }
+}
+
+static FONT: OnceLock<FontArc> = OnceLock::new();
+
+pub fn font() -> &'static FontArc {
+    FONT.get_or_init(|| {
+        FontArc::try_from_slice(include_bytes!("fonts/Inconsolata-Regular.ttf"))
+            .expect("invalid bundled font")
+    })
+}
+
+pub fn char_width(scale: f32) -> f32 {
+    let font = font();
+    let em = font.units_per_em().unwrap_or(1000.0);
+    font.h_advance_unscaled(font.glyph_id('n')) * scale / em
+}
+
+pub fn char_width_default() -> f32 {
+    char_width(FONT_SCALE)
+}
 
 pub fn chars_per_line(max_width: f32) -> usize {
-    (max_width / CHAR_W).floor().max(1.0) as usize
+    (max_width / char_width_default()).floor().max(1.0) as usize
 }
 
 pub fn wrapped_line_count(text: &str, max_width: f32) -> usize {
     let per_line = chars_per_line(max_width);
-    let len = text.chars().count().max(1);
-    len.div_ceil(per_line)
+    text.chars().count().max(1).div_ceil(per_line)
 }
 
-pub fn measure_text(text: &str) -> (f32, f32) {
-    (text.chars().count() as f32 * CHAR_W, CHAR_H)
+pub fn scale_text_batch(batch: &mut TextBatch, scale: f32) {
+    if (scale - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    for section in &mut batch.sections {
+        section.x *= scale;
+        section.y *= scale;
+        section.width *= scale;
+        section.height *= scale;
+        section.scale *= scale;
+    }
 }
 
-pub fn draw_text_wrapped(
-    out: &mut Vec<ShapeInstance>,
+fn push_section(
+    batch: &mut TextBatch,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    text: &str,
+    color: [f32; 4],
+    scale: f32,
+) {
+    if text.is_empty() {
+        return;
+    }
+    batch.sections.push(TextSection {
+        x,
+        y,
+        width,
+        height,
+        text: text.to_string(),
+        color,
+        scale,
+    });
+}
+
+pub fn queue_left(batch: &mut TextBatch, x: f32, y: f32, text: &str, color: [f32; 4]) {
+    queue_left_scaled(batch, x, y, text, color, FONT_SCALE);
+}
+
+pub fn queue_left_scaled(
+    batch: &mut TextBatch,
+    x: f32,
+    y: f32,
+    text: &str,
+    color: [f32; 4],
+    scale: f32,
+) {
+    let cw = char_width(scale);
+    let width = text.chars().count() as f32 * cw;
+    push_section(batch, x, y, width, scale * 1.25, text, color, scale);
+}
+
+pub fn queue_wrapped(
+    batch: &mut TextBatch,
     x: f32,
     y: f32,
     text: &str,
     max_width: f32,
-    line_height: f32,
+    max_height: f32,
     color: [f32; 4],
 ) {
-    let per_line = chars_per_line(max_width);
-    let chars: Vec<char> = text.chars().collect();
-    for (i, chunk) in chars.chunks(per_line).enumerate() {
-        let line: String = chunk.iter().collect();
-        draw_text_left(out, x, y + i as f32 * line_height, &line, color);
-    }
-}
-
-pub fn draw_text_left(
-    out: &mut Vec<ShapeInstance>,
-    x: f32,
-    y: f32,
-    text: &str,
-    color: [f32; 4],
-) {
-    let mut cursor_x = x;
-    for ch in text.chars() {
-        if let Some(glyph) = BASIC_FONTS.get(ch) {
-            for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..8 {
-                    if bits & (1 << col) != 0 {
-                        out.push(ShapeInstance {
-                            pos_size: [cursor_x + col as f32, y + row as f32, 1.0, 1.0],
-                            color,
-                            shape_type: SHAPE_RECT,
-                            _pad: 0,
-                        });
-                    }
-                }
-            }
-        }
-        cursor_x += CHAR_W;
-    }
-}
-
-pub fn append_text_instances(instances: &mut Vec<ShapeInstance>, rect: Rect, text: &str) {
-    let text_width = text.chars().count() as f32 * CHAR_W;
-    let x = rect.x + ((rect.width - text_width) * 0.5).max(0.0);
-    let y = rect.y + ((rect.height - CHAR_H) * 0.5).max(0.0);
-    draw_text_left(instances, x, y, text, [1.0, 1.0, 1.0, 1.0]);
+    push_section(batch, x, y, max_width, max_height, text, color, FONT_SCALE);
 }

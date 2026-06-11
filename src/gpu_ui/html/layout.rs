@@ -1,6 +1,6 @@
 use crate::gpu_ui::geometry::{Rect, BLOCK_GAP, CONTROL_H, PAGE_PAD, TEXT_LINE};
 use crate::gpu_ui::html::node::{inline_width, ButtonType, ElementKind, HtmlNode, InputType};
-use crate::gpu_ui::text::{self, CHAR_W};
+use crate::gpu_ui::text;
 
 pub struct LayoutContext {
     pub page_width: f32,
@@ -91,7 +91,8 @@ fn layout_node(node: &mut HtmlNode, ctx: &mut LayoutContext) {
                 ButtonType::Button => "",
             };
             let text = format!("{prefix}{label}");
-            let w = (text.chars().count() as f32 * CHAR_W + 24.0).clamp(80.0, ctx.content_width());
+            let w = (text.chars().count() as f32 * text::char_width_default() + 24.0)
+                .clamp(80.0, ctx.content_width());
             let lines = text::wrapped_line_count(&text, w - 16.0) as f32;
             let h = (lines * TEXT_LINE + 12.0).max(CONTROL_H);
             let mut rect = ctx.place_block(h);
@@ -159,7 +160,7 @@ fn layout_control_in_row(
             }
         },
         ElementKind::Button { label, .. } => {
-            let text_w = label.chars().count() as f32 * CHAR_W + 24.0;
+            let text_w = label.chars().count() as f32 * text::char_width_default() + 24.0;
             let w = text_w.clamp(80.0, max_w);
             node.bounds = Rect::new(x, y + (row_h - CONTROL_H) * 0.5, w, CONTROL_H);
         }

@@ -8,6 +8,19 @@ use layout::{document_height, hit_test_details_summary, layout_document};
 use node::HtmlNode;
 use paint::paint_document;
 
+#[derive(Default)]
+pub struct RenderBatch {
+    pub shapes: Vec<crate::gpu_ui::shapes::ShapeInstance>,
+    pub text: crate::gpu_ui::text::TextBatch,
+}
+
+impl RenderBatch {
+    pub fn clear(&mut self) {
+        self.shapes.clear();
+        self.text.clear();
+    }
+}
+
 pub struct Document {
     pub nodes: Vec<HtmlNode>,
     pub scroll_y: f32,
@@ -84,12 +97,14 @@ fn toggle_details_in_children(node: &mut HtmlNode, x: f32, y: f32) -> bool {
     }
 }
 
-pub fn collect_instances(
-    document: &Document,
-    scale: f32,
-    out: &mut Vec<crate::gpu_ui::shapes::ShapeInstance>,
-) {
-    out.clear();
-    paint_document(&document.nodes, document.scroll_y, out);
-    crate::gpu_ui::shapes::scale_shape_instances(out, scale);
+pub fn collect_batch(document: &Document, scale: f32, batch: &mut RenderBatch) {
+    batch.clear();
+    paint_document(
+        &document.nodes,
+        document.scroll_y,
+        &mut batch.shapes,
+        &mut batch.text,
+    );
+    crate::gpu_ui::shapes::scale_shape_instances(&mut batch.shapes, scale);
+    crate::gpu_ui::text::scale_text_batch(&mut batch.text, scale);
 }

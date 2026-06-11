@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
+use wgpu_glyph::{GlyphBrushBuilder, Section, Text};
 use winit::window::Window;
 
 use crate::gpu_ui::shapes::{as_bytes, cast_slice, ScreenUniform, ShapeInstance};
+use crate::gpu_ui::text::{self, TextBatch};
 
 const SHAPE_SHADER: &str = include_str!("shaders/shape.wgsl");
 
@@ -15,12 +17,14 @@ pub struct Renderer {
     screen_buffer: wgpu::Buffer,
     shape_pipeline: wgpu::RenderPipeline,
     shape_bind_group: wgpu::BindGroup,
+    glyph_brush: wgpu_glyph::GlyphBrush<()>,
+    staging_belt: wgpu::util::StagingBelt,
 }
 
 impl Renderer {
     pub async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..Default::default()
         });
@@ -149,7 +153,10 @@ impl Renderer {
             cache: None,
         });
 
-        Self {
+        let glyph_brush =
+            GlyphBrushBuilder::using_font(text::font().clone()).build(&device, format);
+
+        let renderer = Self {
             surface,
             device,
             queue,
@@ -157,7 +164,11 @@ impl Renderer {
             screen_buffer,
             shape_pipeline,
             shape_bind_group,
-        }
+            glyph_brush,
+            staging_belt: wgpu::util::StagingBelt::new(4096),
+        };
+        renderer.update_screen_uniform(renderer.config.width, renderer.config.height);
+        renderer
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -178,11 +189,30 @@ impl Renderer {
             .write_buffer(&self.screen_buffer, 0, as_bytes(&uniform));
     }
 
-    pub fn render(&mut self, instances: &[ShapeInstance]) -> Result<(), wgpu::SurfaceError> {
+    fn queue_text(&mut self, text: &TextBatch) {
+        for section in &text.sections {
+            self.glyph_brush.queue(Section {
+                screen_position: (section.x, section.y),
+                bounds: (section.width, section.height),
+                text: vec![Text::new(&section.text)
+                    .with_color(section.color)
+                    .with_scale(section.scale)],
+                ..Section::default()
+            });
+        }
+    }
+
+    pub fn render(
+        &mut self,
+        shapes: &[ShapeInstance],
+        text: &TextBatch,
+    ) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+
+        self.queue_text(text);
 
         let mut encoder = self
             .device
@@ -211,23 +241,36 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            if !instances.is_empty() {
+            if !shapes.is_empty() {
                 let instance_buffer =
                     self.device
                         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                             label: Some("shape_instances"),
-                            contents: cast_slice(instances),
+                            contents: cast_slice(shapes),
                             usage: wgpu::BufferUsages::VERTEX,
                         });
 
                 pass.set_pipeline(&self.shape_pipeline);
                 pass.set_bind_group(0, &self.shape_bind_group, &[]);
                 pass.set_vertex_buffer(0, instance_buffer.slice(..));
-                pass.draw(0..6, 0..instances.len() as u32);
+                pass.draw(0..6, 0..shapes.len() as u32);
             }
         }
 
+        self.glyph_brush
+            .draw_queued(
+                &self.device,
+                &mut self.staging_belt,
+                &mut encoder,
+                &view,
+                self.config.width,
+                self.config.height,
+            )
+            .expect("glyph draw failed");
+
+        self.staging_belt.finish();
         self.queue.submit(std::iter::once(encoder.finish()));
+        self.staging_belt.recall();
         output.present();
         Ok(())
     }

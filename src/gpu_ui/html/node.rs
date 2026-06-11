@@ -130,7 +130,9 @@ pub fn inline_width(inlines: &[Inline]) -> f32 {
     inlines
         .iter()
         .map(|inline| match inline {
-            Inline::Text(t) | Inline::Bold(t) | Inline::Italic(t) => t.chars().count() as f32 * 8.0,
+            Inline::Text(t) | Inline::Bold(t) | Inline::Italic(t) => {
+                t.chars().count() as f32 * crate::gpu_ui::text::char_width_default()
+            }
         })
         .sum()
 }
