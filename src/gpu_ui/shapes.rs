@@ -58,3 +58,16 @@ pub fn cast_slice<T: Copy>(values: &[T]) -> &[u8] {
         std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values))
     }
 }
+
+/// Scale layout coordinates (logical points) to physical framebuffer pixels.
+pub fn scale_shape_instances(instances: &mut [ShapeInstance], scale: f32) {
+    if (scale - 1.0).abs() < f32::EPSILON {
+        return;
+    }
+    for instance in instances {
+        instance.pos_size[0] *= scale;
+        instance.pos_size[1] *= scale;
+        instance.pos_size[2] *= scale;
+        instance.pos_size[3] *= scale;
+    }
+}

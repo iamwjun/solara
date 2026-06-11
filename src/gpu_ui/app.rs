@@ -27,17 +27,36 @@ struct GpuUiApp {
     document: Option<Document>,
     instances: Vec<ShapeInstance>,
     viewport_height: f32,
+    scale_factor: f32,
     cursor: (f32, f32),
 }
 
 impl GpuUiApp {
+    fn logical_size(window: &Window) -> (f32, f32) {
+        let scale = window.scale_factor();
+        let size = window.inner_size().to_logical::<f32>(scale);
+        (size.width, size.height)
+    }
+
+    fn sync_layout(&mut self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+
+        self.scale_factor = window.scale_factor() as f32;
+        let (width, height) = Self::logical_size(window);
+        self.viewport_height = height;
+        if let Some(document) = self.document.as_mut() {
+            document.relayout(width);
+        }
+    }
+
     fn rebuild(&mut self) {
         let Some(document) = self.document.as_mut() else {
             return;
         };
         document.clamp_scroll_to(self.viewport_height);
-        self.instances.clear();
-        crate::gpu_ui::html::collect_instances(document, &mut self.instances);
+        crate::gpu_ui::html::collect_instances(document, self.scale_factor, &mut self.instances);
     }
 
     fn render(&mut self) {
@@ -77,8 +96,10 @@ impl ApplicationHandler for GpuUiApp {
         );
 
         let renderer = block_on(Renderer::new(window.clone()));
-        self.viewport_height = WINDOW_HEIGHT as f32;
-        self.document = Some(Document::new(WINDOW_WIDTH as f32));
+        self.scale_factor = window.scale_factor() as f32;
+        let (width, height) = Self::logical_size(&window);
+        self.viewport_height = height;
+        self.document = Some(Document::new(width));
         self.window = Some(window);
         self.renderer = Some(renderer);
 
@@ -107,10 +128,15 @@ impl ApplicationHandler for GpuUiApp {
                 if let Some(renderer) = self.renderer.as_mut() {
                     renderer.resize(size.width, size.height);
                 }
-                if let Some(document) = self.document.as_mut() {
-                    document.relayout(size.width as f32);
+                self.sync_layout();
+                window.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    let size = window.inner_size();
+                    renderer.resize(size.width, size.height);
                 }
-                self.viewport_height = size.height as f32;
+                self.sync_layout();
                 window.request_redraw();
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -120,7 +146,7 @@ impl ApplicationHandler for GpuUiApp {
                 if let Some(document) = self.document.as_mut() {
                     let scroll = match delta {
                         MouseScrollDelta::LineDelta(_, y) => y * 24.0,
-                        MouseScrollDelta::PixelDelta(p) => p.y as f32,
+                        MouseScrollDelta::PixelDelta(p) => p.y as f32 / self.scale_factor,
                     };
                     document.scroll_by(scroll);
                 }

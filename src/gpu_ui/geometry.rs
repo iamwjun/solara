@@ -33,3 +33,6 @@ pub const PAGE_PAD: f32 = 16.0;
 pub const BLOCK_GAP: f32 = 8.0;
 pub const TEXT_LINE: f32 = 18.0;
 pub const CONTROL_H: f32 = 28.0;
+
+// All layout constants above are in logical points (CSS px at 1x).
+// Multiply by window scale_factor when emitting GPU instances on HiDPI displays.

@@ -80,6 +80,12 @@ fn toggle_details_in_children(node: &mut HtmlNode, x: f32, y: f32) -> bool {
     }
 }
 
-pub fn collect_instances(document: &Document, out: &mut Vec<crate::gpu_ui::shapes::ShapeInstance>) {
+pub fn collect_instances(
+    document: &Document,
+    scale: f32,
+    out: &mut Vec<crate::gpu_ui::shapes::ShapeInstance>,
+) {
+    out.clear();
     paint_document(&document.nodes, document.scroll_y, out);
+    crate::gpu_ui::shapes::scale_shape_instances(out, scale);
 }
