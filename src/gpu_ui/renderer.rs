@@ -1,13 +1,13 @@
-use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use softbuffer::{Context, Surface};
-use winit::event_loop::OwnedDisplayHandle;
+use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use crate::gpu_ui::draw::{clear, color_to_pixel, draw_triangle_demo, fill_circle};
 use crate::gpu_ui::layout::Button;
-use crate::gpu_ui::shapes::draw_button;
+use crate::gpu_ui::shapes::{as_bytes, cast_slice, ScreenUniform, ShapeInstance};
+
+const SHAPE_SHADER: &str = include_str!("shaders/shape.wgsl");
+const TRIANGLE_SHADER: &str = include_str!("shaders/triangle.wgsl");
 
 pub struct DemoCircle {
     pub center_x: f32,
@@ -17,61 +17,300 @@ pub struct DemoCircle {
 }
 
 pub struct Renderer {
-    surface: Surface<OwnedDisplayHandle, Arc<Window>>,
-    width: u32,
-    height: u32,
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    screen_buffer: wgpu::Buffer,
+    shape_pipeline: wgpu::RenderPipeline,
+    shape_bind_group: wgpu::BindGroup,
+    triangle_pipeline: wgpu::RenderPipeline,
+    triangle_bind_group: wgpu::BindGroup,
 }
 
 impl Renderer {
-    pub fn new(context: &Context<OwnedDisplayHandle>, window: Arc<Window>, width: u32, height: u32) -> Self {
-        let mut surface = Surface::new(context, window).expect("failed to create surface");
-        if let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
-            surface.resize(width, height).expect("failed to resize surface");
-        }
+    pub async fn new(window: Arc<Window>) -> Self {
+        let size = window.inner_size();
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            ..Default::default()
+        });
 
-        Self { surface, width, height }
+        let surface = instance
+            .create_surface(window.clone())
+            .expect("failed to create surface");
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .expect("failed to find adapter");
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("gpu_ui_device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                },
+                None,
+            )
+            .await
+            .expect("failed to create device");
+
+        let caps = surface.get_capabilities(&adapter);
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(caps.formats[0]);
+
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        let screen_uniform = ScreenUniform {
+            size: [config.width as f32, config.height as f32],
+            _pad: [0.0, 0.0],
+        };
+        let screen_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("screen_uniform"),
+            contents: as_bytes(&screen_uniform),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let screen_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("screen_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let shape_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shape_screen_bind_group"),
+            layout: &screen_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: screen_buffer.as_entire_binding(),
+            }],
+        });
+
+        let shape_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shape_shader"),
+            source: wgpu::ShaderSource::Wgsl(SHAPE_SHADER.into()),
+        });
+
+        let shape_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shape_pipeline_layout"),
+            bind_group_layouts: &[&screen_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let shape_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shape_pipeline"),
+            layout: Some(&shape_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shape_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ShapeInstance>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![1 => Float32x4, 2 => Float32x4, 3 => Uint32],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shape_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let triangle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("triangle_shader"),
+            source: wgpu::ShaderSource::Wgsl(TRIANGLE_SHADER.into()),
+        });
+
+        let triangle_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("triangle_pipeline_layout"),
+                bind_group_layouts: &[&screen_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let triangle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("triangle_pipeline"),
+            layout: Some(&triangle_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &triangle_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &triangle_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let triangle_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("triangle_screen_bind_group"),
+            layout: &screen_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: screen_buffer.as_entire_binding(),
+            }],
+        });
+
+        Self {
+            surface,
+            device,
+            queue,
+            config,
+            screen_buffer,
+            shape_pipeline,
+            shape_bind_group,
+            triangle_pipeline,
+            triangle_bind_group,
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
-            return;
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+            self.update_screen_uniform(width, height);
         }
+    }
 
-        self.width = width;
-        self.height = height;
-        if let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
-            self.surface
-                .resize(width, height)
-                .expect("failed to resize surface");
-        }
+    fn update_screen_uniform(&self, width: u32, height: u32) {
+        let uniform = ScreenUniform {
+            size: [width as f32, height as f32],
+            _pad: [0.0, 0.0],
+        };
+        self.queue
+            .write_buffer(&self.screen_buffer, 0, as_bytes(&uniform));
     }
 
     pub fn render(
         &mut self,
         buttons: &[Button],
         demo_circle: &DemoCircle,
-    ) -> Result<(), softbuffer::SoftBufferError> {
-        let mut buffer = self.surface.buffer_mut()?;
-        let width = self.width;
-        let height = self.height;
+    ) -> Result<(), wgpu::SurfaceError> {
+        let output = self.surface.get_current_texture()?;
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        clear(&mut buffer, color_to_pixel(0.08, 0.09, 0.12));
-        draw_triangle_demo(&mut buffer, width, height);
-
+        let mut instances: Vec<ShapeInstance> = Vec::new();
         for button in buttons {
-            draw_button(&mut buffer, width, height, button);
+            instances.extend(ShapeInstance::from_button(button));
         }
-
-        fill_circle(
-            &mut buffer,
-            width,
-            height,
+        instances.push(ShapeInstance::circle(
             demo_circle.center_x,
             demo_circle.center_y,
             demo_circle.diameter,
             demo_circle.color,
-        );
+        ));
 
-        buffer.present()
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gpu_ui_encoder"),
+            });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("gpu_ui_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.08,
+                            g: 0.09,
+                            b: 0.12,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            pass.set_pipeline(&self.triangle_pipeline);
+            pass.set_bind_group(0, &self.triangle_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+
+            if !instances.is_empty() {
+                let instance_buffer =
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("shape_instances"),
+                            contents: cast_slice(&instances),
+                            usage: wgpu::BufferUsages::VERTEX,
+                        });
+
+                pass.set_pipeline(&self.shape_pipeline);
+                pass.set_bind_group(0, &self.shape_bind_group, &[]);
+                pass.set_vertex_buffer(0, instance_buffer.slice(..));
+                pass.draw(0..6, 0..instances.len() as u32);
+            }
+        }
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+        Ok(())
     }
 }

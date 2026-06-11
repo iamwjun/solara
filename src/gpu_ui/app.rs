@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use softbuffer::Context;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, OwnedDisplayHandle};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
+use crate::gpu_ui::async_utils::block_on;
 use crate::gpu_ui::layout::{Button, FlexRow};
 use crate::gpu_ui::renderer::{DemoCircle, Renderer};
 use crate::gpu_ui::shapes::circle_contains;
@@ -16,13 +16,12 @@ const WINDOW_HEIGHT: u32 = 540;
 
 pub fn run() {
     let event_loop = EventLoop::new().expect("failed to create event loop");
-    let context = Context::new(event_loop.owned_display_handle()).expect("failed to create context");
-    let mut app = GpuUiApp::new(context);
+    let mut app = GpuUiApp::default();
     event_loop.run_app(&mut app).expect("event loop failed");
 }
 
+#[derive(Default)]
 struct GpuUiApp {
-    context: Context<OwnedDisplayHandle>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     buttons: Vec<Button>,
@@ -31,24 +30,18 @@ struct GpuUiApp {
     cursor: (f32, f32),
 }
 
-impl GpuUiApp {
-    fn new(context: Context<OwnedDisplayHandle>) -> Self {
+impl Default for DemoCircle {
+    fn default() -> Self {
         Self {
-            context,
-            window: None,
-            renderer: None,
-            buttons: Vec::new(),
-            demo_circle: DemoCircle {
-                center_x: 820.0,
-                center_y: 120.0,
-                diameter: 96.0,
-                color: [0.95, 0.55, 0.15, 1.0],
-            },
-            layout_dirty: true,
-            cursor: (0.0, 0.0),
+            center_x: 820.0,
+            center_y: 120.0,
+            diameter: 96.0,
+            color: [0.95, 0.55, 0.15, 1.0],
         }
     }
+}
 
+impl GpuUiApp {
     fn init_buttons(&mut self) {
         self.buttons = vec![
             Button::new("Click Me", [0.18, 0.42, 0.86, 1.0]),
@@ -101,8 +94,16 @@ impl GpuUiApp {
             return;
         };
 
-        if let Err(err) = renderer.render(&self.buttons, &self.demo_circle) {
-            eprintln!("render error: {err:?}");
+        match renderer.render(&self.buttons, &self.demo_circle) {
+            Ok(()) => {}
+            Err(wgpu::SurfaceError::Lost) => {
+                if let Some(window) = &self.window {
+                    let size = window.inner_size();
+                    renderer.resize(size.width, size.height);
+                }
+            }
+            Err(wgpu::SurfaceError::OutOfMemory) => panic!("wgpu ran out of memory"),
+            Err(err) => eprintln!("surface error: {err:?}"),
         }
     }
 }
@@ -119,7 +120,7 @@ impl ApplicationHandler for GpuUiApp {
         }
 
         let window_attributes = Window::default_attributes()
-            .with_title("Solara Softbuffer UI")
+            .with_title("Solara GPU UI")
             .with_inner_size(LogicalSize::new(WINDOW_WIDTH, WINDOW_HEIGHT));
 
         let window = Arc::new(
@@ -128,7 +129,7 @@ impl ApplicationHandler for GpuUiApp {
                 .expect("failed to create window"),
         );
 
-        let renderer = Renderer::new(&self.context, window.clone(), WINDOW_WIDTH, WINDOW_HEIGHT);
+        let renderer = block_on(Renderer::new(window.clone()));
         self.window = Some(window);
         self.renderer = Some(renderer);
         self.init_buttons();

@@ -17,9 +17,9 @@ include = [
     "LICENSE",
     "README.md",
     "src/**/*.rs",
+    "src/**/*.wgsl",
 ]
 
 [dependencies]
-font8x8 = "0.3"
-softbuffer = "0.4"
+wgpu = "24"
 winit = "0.30"
